@@ -3,7 +3,7 @@
 
 #include "../lib/SparkFun_TMP102_Arduino_Library-master/src/SparkFunTMP102.h"
 
-// Connections
+// Connections TMP102
 // VCC = 3.3V
 // GND = GND
 // SDA = A4
@@ -11,6 +11,14 @@
 const int ALERT_PIN = A3;
 
 TMP102 sensor0(0x48); // Initialize sensor at I2C address 0x48
+// Fan PWM
+const int FAN_PIN = 3;
+
+const int FAN_PWM_MAX = 225;
+const int FAN_PWM_MIN = 0;
+
+int incomingByte = 0;   // for incoming serial data
+int pwmFunValue = 50;
 
 void setup()
 {
@@ -46,11 +54,45 @@ void setup()
 
     //set T_LOW, the lower limit to shut turn off the alert
     sensor0.setLowTempC(26.67); // set T_LOW in C
+
+    // fan
+    pinMode(FAN_PIN,OUTPUT);
 }
 
 void loop()
 {
     // put your main code here, to run repeatedly:
+
+    // when receive data:
+    if (Serial.available() > 0) {
+            // read the incoming byte:
+            incomingByte = Serial.read();
+
+            // say what you got:
+            //Serial.print("Received: ");
+            //Serial.println(incomingByte);
+
+            if(incomingByte == 43)
+            {
+              // +
+              if(pwmFunValue < FAN_PWM_MAX)
+                pwmFunValue+=2;
+            }
+            else if(incomingByte == 45)
+            {
+              // -
+              if(pwmFunValue > FAN_PWM_MIN)
+                pwmFunValue-=2;
+            }
+            else if(incomingByte == 48)
+            {
+              pwmFunValue = 0;
+            }
+            else if(incomingByte == 57)
+            {
+              pwmFunValue = 200;
+            }
+    }
 
     float temperature;
     boolean alertPinState, alertRegisterState;
@@ -74,11 +116,18 @@ void loop()
     Serial.print("Temperature: ");
     Serial.print(temperature);
 
-    Serial.print("\tAlert Pin: ");
-    Serial.print(alertPinState);
+    // Serial.print("\tAlert Pin: ");
+    // Serial.print(alertPinState);
+    //
+    // Serial.print("\tAlert Register: ");
+    // Serial.println(alertRegisterState);
 
-    Serial.print("\tAlert Register: ");
-    Serial.println(alertRegisterState);
 
-    delay(1000);  // Wait 1000ms
+    delay(100);  // Wait 1000ms
+
+    // FAN_PIN
+    analogWrite(FAN_PIN, pwmFunValue);  // analogRead values go from 0 to 1023, analogWrite values from 0 to 255
+
+    Serial.print("\tPWM: ");
+    Serial.println(pwmFunValue);
 }
