@@ -14,15 +14,46 @@ TMP102 sensor0(0x48); // Initialize sensor at I2C address 0x48
 // Fan PWM
 const int FAN_PIN = 3;
 
-const int FAN_PWM_MAX = 225;
+const int FAN_PWM_MAX = 255;
 const int FAN_PWM_MIN = 0;
 
 int incomingByte = 0;   // for incoming serial data
 int pwmFunValue = 50;
 
+/*working variables*/
+unsigned long lastTime;
+double Input, Output, Setpoint;
+double errSum, lastErr;
+double kp, ki, kd;
+
+void Compute()
+{
+   /*How long since we last calculated*/
+   unsigned long now = millis();
+   double timeChange = (double)(now - lastTime);
+
+   /*Compute all the working error variables*/
+   double error = Setpoint - Input;
+   errSum += (error * timeChange);
+   double dErr = (error - lastErr) / timeChange;
+
+   /*Compute PID Output*/
+   Output = kp * error + ki * errSum + kd * dErr;
+
+   /*Remember some variables for next time*/
+   lastErr = error;
+   lastTime = now;
+}
+
 void setup()
 {
     // put your setup code here, to run once:
+
+    kp = 250;
+    ki = 0;
+    kd = 0;
+
+    Setpoint = 35;
 
     Serial.begin(9600); // Start serial communication at 9600 baud
     pinMode(ALERT_PIN,INPUT);  // Declare alertPin as an input
@@ -76,13 +107,13 @@ void loop()
             {
               // +
               if(pwmFunValue < FAN_PWM_MAX)
-                pwmFunValue+=2;
+                pwmFunValue+=1;
             }
             else if(incomingByte == 45)
             {
               // -
               if(pwmFunValue > FAN_PWM_MIN)
-                pwmFunValue-=2;
+                pwmFunValue-=1;
             }
             else if(incomingByte == 48)
             {
@@ -90,7 +121,7 @@ void loop()
             }
             else if(incomingByte == 57)
             {
-              pwmFunValue = 200;
+              pwmFunValue = 50;
             }
     }
 
@@ -113,8 +144,9 @@ void loop()
     sensor0.sleep();
 
     // Print temperature and alarm state
-    Serial.print("Temperature: ");
+    //Serial.print("Temperature: ");
     Serial.print(temperature);
+    Serial.print(";");
 
     // Serial.print("\tAlert Pin: ");
     // Serial.print(alertPinState);
@@ -123,11 +155,27 @@ void loop()
     // Serial.println(alertRegisterState);
 
 
-    delay(100);  // Wait 1000ms
+    delay(1000);  // Wait 1000ms
+
+    // PID
+    Input = temperature;
+    Compute();
+    pwmFunValue = Output;
 
     // FAN_PIN
+    if(pwmFunValue > FAN_PWM_MAX)
+      pwmFunValue = FAN_PWM_MAX;
+    else if (pwmFunValue < FAN_PWM_MIN)
+      pwmFunValue = FAN_PWM_MIN;
     analogWrite(FAN_PIN, pwmFunValue);  // analogRead values go from 0 to 1023, analogWrite values from 0 to 255
 
-    Serial.print("\tPWM: ");
-    Serial.println(pwmFunValue);
+    Serial.print("\t");
+    Serial.print(pwmFunValue);
+    Serial.println(";");
+
+    // OTHER...
+    // int val = analogRead(A2);     // read the input pin
+    // Serial.println(val);             // debug value
+
+
 }
