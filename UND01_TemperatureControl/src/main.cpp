@@ -3,59 +3,33 @@
 
 #include "../lib/SparkFun_TMP102_Arduino_Library-master/src/SparkFunTMP102.h"
 
-// Connections TMP102
+// Temperature Sensor
+const int ALERT_PIN = A3;
+TMP102 sensor0(0x48); // Initialize sensor at I2C address 0x48
+const int SENSOR_TEMP_MAX = 80;
+const int SENSOR_TEMP_MIN = 0;
+
+// Peltier Controller
+const int PELTIER_PIN = 3;
+const int PELTIER_PWM_MAX = 255;
+const int PELTIER_PWM_MIN = 0;
+
+float PID_LastTime = 0.0;
+float PID_ErrSum = 0.0;
+float PID_LastErr = 0.0;
+
+/*
+    Temperature Sensor Functions
+*/
+
+// Connections Tempereture Sensor TMP102
 // VCC = 3.3V
 // GND = GND
 // SDA = A4
 // SCL = A5
-const int ALERT_PIN = A3;
 
-TMP102 sensor0(0x48); // Initialize sensor at I2C address 0x48
-// Fan PWM
-const int FAN_PIN = 3;
-
-const int FAN_PWM_MAX = 255;
-const int FAN_PWM_MIN = 0;
-
-int incomingByte = 0;   // for incoming serial data
-int pwmFunValue = 50;
-
-/*working variables*/
-unsigned long lastTime;
-double Input, Output, Setpoint;
-double errSum, lastErr;
-double kp, ki, kd;
-
-void Compute()
+int InitTemperatureSensor()
 {
-   /*How long since we last calculated*/
-   unsigned long now = millis();
-   double timeChange = (double)(now - lastTime);
-
-   /*Compute all the working error variables*/
-   double error = Setpoint - Input;
-   errSum += (error * timeChange);
-   double dErr = (error - lastErr) / timeChange;
-
-   /*Compute PID Output*/
-   Output = kp * error + ki * errSum + kd * dErr;
-
-   /*Remember some variables for next time*/
-   lastErr = error;
-   lastTime = now;
-}
-
-void setup()
-{
-    // put your setup code here, to run once:
-
-    kp = 250;
-    ki = 0;
-    kd = 0;
-
-    Setpoint = 35;
-
-    Serial.begin(9600); // Start serial communication at 9600 baud
     pinMode(ALERT_PIN,INPUT);  // Declare alertPin as an input
     sensor0.begin();  // Join I2C bus
 
@@ -81,53 +55,16 @@ void setup()
     sensor0.setExtendedMode(0);
 
     //set T_HIGH, the upper limit to trigger the alert on
-    sensor0.setHighTempC(29.4); // set T_HIGH in C
+    sensor0.setHighTempC(SENSOR_TEMP_MAX); // set T_HIGH in C
 
     //set T_LOW, the lower limit to shut turn off the alert
-    sensor0.setLowTempC(26.67); // set T_LOW in C
+    sensor0.setLowTempC(SENSOR_TEMP_MIN); // set T_LOW in C
 
-    // fan
-    pinMode(FAN_PIN,OUTPUT);
+    return 0;
 }
 
-void loop()
+void GetTemperature(float &temperature, bool &alertPinState, boolean &alertRegisterState)
 {
-    // put your main code here, to run repeatedly:
-
-    // when receive data:
-    if (Serial.available() > 0) {
-            // read the incoming byte:
-            incomingByte = Serial.read();
-
-            // say what you got:
-            //Serial.print("Received: ");
-            //Serial.println(incomingByte);
-
-            if(incomingByte == 43)
-            {
-              // +
-              if(pwmFunValue < FAN_PWM_MAX)
-                pwmFunValue+=1;
-            }
-            else if(incomingByte == 45)
-            {
-              // -
-              if(pwmFunValue > FAN_PWM_MIN)
-                pwmFunValue-=1;
-            }
-            else if(incomingByte == 48)
-            {
-              pwmFunValue = 0;
-            }
-            else if(incomingByte == 57)
-            {
-              pwmFunValue = 50;
-            }
-    }
-
-    float temperature;
-    boolean alertPinState, alertRegisterState;
-
     // Turn sensor on to start temperature measurement.
     // Current consumtion typically ~10uA.
     sensor0.wakeup();
@@ -142,40 +79,78 @@ void loop()
     // Place sensor in sleep mode to save power.
     // Current consumtion typically <0.5uA.
     sensor0.sleep();
+}
 
-    // Print temperature and alarm state
-    //Serial.print("Temperature: ");
+/*
+    Peltier Controller
+*/
+float PIDController(float inputMeasured, float setPoint, float kp, float ki, float kd)
+{
+    // Time calculate from last time called
+    unsigned long now = millis();
+    float timeChange = (float)(now - PID_LastTime);
+
+    // Calculate error variables
+    float error = setPoint - inputMeasured;
+    PID_ErrSum += (error * timeChange);
+    float dErr = (error - PID_LastErr) / timeChange;
+
+    // Compute PID
+    float output = kp * error + ki * PID_ErrSum + kd * dErr;
+
+    // Variables for next time
+    PID_LastErr = error;
+    PID_LastTime = now;
+
+    // Return
+    return output;
+}
+
+void UpdatePeltierAction(float pwmValue)
+{
+    // Limits
+    if(pwmValue > PELTIER_PWM_MAX)
+        pwmValue = PELTIER_PWM_MAX;
+    else if (pwmValue < PELTIER_PWM_MIN)
+        pwmValue = PELTIER_PWM_MIN;
+
+    // Control
+    analogWrite(PELTIER_PIN, pwmValue);  // analogRead values go from 0 to 1023, analogWrite values from 0 to 255
+}
+
+void setup()
+{
+    // Sensor Init
+    InitTemperatureSensor();
+
+    // Peltier Init
+    pinMode(PELTIER_PIN,OUTPUT);
+
+    // Serial Start
+    Serial.begin(9600); // Start serial communication at 9600 baud
+}
+
+void loop()
+{
+    // Get Temperature
+    float temperature;
+    boolean alertPinState, alertRegisterState;
+    GetTemperature(temperature, alertPinState, alertRegisterState);
+
+    // Get PID Output
+    float kp = 250;
+    float ki = 0;
+    float kd = 0;
+    float setPoint = 35;    // 35 Degrees setpoint
+    float output = PIDController(temperature, setPoint, kp, ki, kd);
+
+    // Send Peltier Action
+    UpdatePeltierAction(output);
+
+    // Print serial
+    Serial.print(millis());
+    Serial.print(";");
     Serial.print(temperature);
     Serial.print(";");
-
-    // Serial.print("\tAlert Pin: ");
-    // Serial.print(alertPinState);
-    //
-    // Serial.print("\tAlert Register: ");
-    // Serial.println(alertRegisterState);
-
-
-    delay(1000);  // Wait 1000ms
-
-    // PID
-    Input = temperature;
-    Compute();
-    pwmFunValue = Output;
-
-    // FAN_PIN
-    if(pwmFunValue > FAN_PWM_MAX)
-      pwmFunValue = FAN_PWM_MAX;
-    else if (pwmFunValue < FAN_PWM_MIN)
-      pwmFunValue = FAN_PWM_MIN;
-    analogWrite(FAN_PIN, pwmFunValue);  // analogRead values go from 0 to 1023, analogWrite values from 0 to 255
-
-    Serial.print("\t");
-    Serial.print(pwmFunValue);
-    Serial.println(";");
-
-    // OTHER...
-    // int val = analogRead(A2);     // read the input pin
-    // Serial.println(val);             // debug value
-
-
+    Serial.println(output);
 }
