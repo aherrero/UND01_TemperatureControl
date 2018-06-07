@@ -1,7 +1,9 @@
 #include <Arduino.h>
 #include <Wire.h> // Used to establied serial communication on the I2C bus
+#include <inttypes.h>
 
 #include "../lib/SparkFun_TMP102_Arduino_Library-master/src/SparkFunTMP102.h"
+#include "../lib/LiquidCrystal-master/src/LiquidCrystal.h"
 
 // Temperature Sensor
 const int ALERT_PIN = A3;
@@ -10,13 +12,30 @@ const int SENSOR_TEMP_MAX = 80;
 const int SENSOR_TEMP_MIN = 0;
 
 // Peltier Controller
-const int PELTIER_PIN = 3;
+const int PELTIER_PIN = 9;
+const int FUN_PIN = 10;
 const int PELTIER_PWM_MAX = 255;
-const int PELTIER_PWM_MIN = 0;
+const int PELTIER_PWM_MIN = -255;
+
+// Controller
+int CONTROLLER_ID;
+const int SET_POINT = 35;
 
 float PID_LastTime = 0.0;
 float PID_ErrSum = 0.0;
 float PID_LastErr = 0.0;
+
+const int CONTROLLER_HYSTERESIS = 0;
+const int CONTROLLER_PI = 1;
+const int CONTROLLER_PI_ANTIWINDUP = 2;
+const int CONTROLLER_PI_FILTERING = 3;
+const int CONTROLLER_EVENTS_= 4;
+
+// Display
+// initialize the library by associating any needed LCD interface pin
+// with the arduino pin number it is connected to
+const int PIN_rs = 12, PIN_en = 11, PIN_d4 = 5, PIN_d5 = 4, PIN_d6 = 3, PIN_d7 = 2;
+LiquidCrystal lcd(PIN_rs, PIN_en, PIN_d4, PIN_d5, PIN_d6, PIN_d7);
 
 /*
     Temperature Sensor Functions
@@ -82,7 +101,7 @@ void GetTemperature(float &temperature, bool &alertPinState, boolean &alertRegis
 }
 
 /*
-    Peltier Controller
+    Controller
 */
 float PIDController(float inputMeasured, float setPoint, float kp, float ki, float kd)
 {
@@ -106,6 +125,14 @@ float PIDController(float inputMeasured, float setPoint, float kp, float ki, flo
     return output;
 }
 
+float HystereisController(float inputMeasured, float setPoint)
+{
+    if(inputMeasured < setPoint)
+        return PELTIER_PWM_MAX;
+    else
+        return PELTIER_PWM_MIN;
+}
+
 void UpdatePeltierAction(float pwmValue)
 {
     // Limits
@@ -115,7 +142,58 @@ void UpdatePeltierAction(float pwmValue)
         pwmValue = PELTIER_PWM_MIN;
 
     // Control
-    analogWrite(PELTIER_PIN, pwmValue);  // analogRead values go from 0 to 1023, analogWrite values from 0 to 255
+    // Positve or negative: Peltier or Fun
+    if(pwmValue > 0)
+        analogWrite(PELTIER_PIN, pwmValue);  // analogWrite values from 0 to 255
+    else
+        analogWrite(FUN_PIN, pwmValue);  // analogWrite values from 0 to 255
+}
+
+int PrintMessageDisplay(String msg, int line)
+{
+    // clear the screen
+    lcd.clear();
+
+    // Check Line
+    if(line < 0 || line > 1)
+        return -1;
+
+    // Convert Data
+    uint8_t data[16];
+    msg.toCharArray(data,16);            // or myString.StringToCharArray(data,sizeof(data));
+
+    // set the cursor to column 0, line 1
+    // (note: line 1 is the second row, since counting begins with 0):
+    lcd.setCursor(0, line);
+
+    // Write info
+    lcd.print(msg);
+
+    return 0;
+}
+
+float ControllerSelected(int CONTROL_ID, float currentSensor)
+{
+    float output = 0.0;
+
+    // const int CONTROLLER_HYSTERESIS = 0;
+    // const int CONTROLLER_PI = 1;
+    // const int CONTROLLER_PI_ANTIWINDUP = 2;
+    // const int CONTROLLER_PI_FILTERING = 3;
+    // const int CONTROLLER_EVENTS_= 4;
+    switch (CONTROL_ID)
+    {
+        case CONTROLLER_HYSTERESIS:
+            output = HystereisController(currentSensor, SET_POINT);
+            break;
+        case CONTROLLER_PI:
+            output = PIDController(currentSensor, SET_POINT, 250, 0, 0);
+            break;
+        default:
+            break;
+    }
+
+    return output;
 }
 
 void setup()
@@ -125,6 +203,13 @@ void setup()
 
     // Peltier Init
     pinMode(PELTIER_PIN,OUTPUT);
+
+    // Controller Init
+    CONTROLLER_ID = 1;
+
+    // Display Init
+    // set up the LCD's number of columns and rows:
+    lcd.begin(16, 2);
 
     // Serial Start
     Serial.begin(9600); // Start serial communication at 9600 baud
@@ -137,12 +222,8 @@ void loop()
     boolean alertPinState, alertRegisterState;
     GetTemperature(temperature, alertPinState, alertRegisterState);
 
-    // Get PID Output
-    float kp = 250;
-    float ki = 0;
-    float kd = 0;
-    float setPoint = 35;    // 35 Degrees setpoint
-    float output = PIDController(temperature, setPoint, kp, ki, kd);
+    // Get Output Controller
+    float output = ControllerSelected(CONTROLLER_ID, temperature);
 
     // Send Peltier Action
     UpdatePeltierAction(output);
@@ -153,4 +234,9 @@ void loop()
     Serial.print(temperature);
     Serial.print(";");
     Serial.println(output);
+
+    // Print Display
+    PrintMessageDisplay("Control: " + String(CONTROLLER_ID), 0);
+    PrintMessageDisplay("Temp: " + String(temperature) + "ºC", 1);
+
 }
