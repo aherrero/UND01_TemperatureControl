@@ -27,9 +27,22 @@ float PID_LastErr = 0.0;
 
 const int CONTROLLER_HYSTERESIS = 0;
 const int CONTROLLER_PI = 1;
-const int CONTROLLER_PI_ANTIWINDUP = 2;
+const int CONTROLLER_PI_RESETWINDUP = 2;
 const int CONTROLLER_PI_FILTERING = 3;
 const int CONTROLLER_EVENTS_= 4;
+
+float _temperature = 0;
+float _outputPID = 0;
+
+// Timer
+unsigned long lastTimeRead = 0;
+const int interval_10ms = 10;
+const int interval_100ms = 100;
+const int interval_1000ms = 1000;
+int counter_10ms = 0;
+int counter_100ms = 0;
+int counter_1000ms = 0;
+
 
 // Display
 // initialize the library by associating any needed LCD interface pin
@@ -103,7 +116,7 @@ void GetTemperature(float &temperature, bool &alertPinState, boolean &alertRegis
 /*
     Controller
 */
-float PIDController(float inputMeasured, float setPoint, float kp, float ki, float kd)
+float PIDController(float inputMeasured, float setPoint, float kp, float ki, float kd, float outMin, float outMax)
 {
     // Time calculate from last time called
     unsigned long now = millis();
@@ -111,11 +124,20 @@ float PIDController(float inputMeasured, float setPoint, float kp, float ki, flo
 
     // Calculate error variables
     float error = setPoint - inputMeasured;
+
+    //I
     PID_ErrSum += (error * timeChange);
+    float ITerm = (ki * PID_ErrSum);
+    if(ITerm> outMax) ITerm= outMax;
+    else if(ITerm< outMin) ITerm= outMin;
+
+    //D
     float dErr = (error - PID_LastErr) / timeChange;
 
     // Compute PID
-    float output = kp * error + ki * PID_ErrSum + kd * dErr;
+    float output = kp * error + ITerm + kd * dErr;
+    if(output > outMax) output = outMax;
+    else if(output < outMin) output = outMin;
 
     // Variables for next time
     PID_LastErr = error;
@@ -146,7 +168,7 @@ void UpdatePeltierAction(float pwmValue)
     if(pwmValue > 0)
         analogWrite(PELTIER_PIN, pwmValue);  // analogWrite values from 0 to 255
     else
-        analogWrite(FUN_PIN, pwmValue);  // analogWrite values from 0 to 255
+        analogWrite(FUN_PIN, -pwmValue);  // Fun. Positive values.
 }
 
 int PrintMessageDisplay(String msg, int line)
@@ -187,13 +209,76 @@ float ControllerSelected(int CONTROL_ID, float currentSensor)
             output = HystereisController(currentSensor, SET_POINT);
             break;
         case CONTROLLER_PI:
-            output = PIDController(currentSensor, SET_POINT, 250, 0, 0);
+            output = PIDController(currentSensor, SET_POINT, 250, 0, 0, -999, 999);
+            break;
+        case CONTROLLER_PI_RESETWINDUP:
+            output = PIDController(currentSensor, SET_POINT, 250, 0, 0, PELTIER_PWM_MIN, PELTIER_PWM_MAX);
             break;
         default:
             break;
     }
 
     return output;
+}
+
+static void RunTaskScheduler10ms()
+{
+
+}
+
+static void RunTaskScheduler100ms()
+{
+    // Get Temperature
+    boolean alertPinState, alertRegisterState;
+    GetTemperature(_temperature, alertPinState, alertRegisterState);
+
+    // Get Output Controller
+    _outputPID = ControllerSelected(CONTROLLER_ID, _temperature);
+
+    // Send Peltier Action
+    UpdatePeltierAction(_outputPID);
+}
+
+static void RunTaskScheduler1s()
+{
+    // Print serial
+    Serial.print(millis());
+    Serial.print(";");
+    Serial.print(_temperature);
+    Serial.print(";");
+    Serial.println(_outputPID);
+
+    // Print Display
+    PrintMessageDisplay("Control: " + String(CONTROLLER_ID), 0);
+    PrintMessageDisplay("Temp: " + String(_temperature) + "ºC", 1);
+}
+
+static void RunTaskScheduler(void)
+{
+    int timeDiff = millis() - lastTimeRead;
+    if(timeDiff >= interval_10ms)
+    {
+        lastTimeRead = millis();
+        counter_10ms++;
+        counter_100ms++;
+    }
+
+    if (counter_10ms > 0)
+    {
+        RunTaskScheduler10ms();
+    }
+
+    if(counter_10ms > 10)
+    {
+        RunTaskScheduler100ms();
+        counter_10ms = 0;
+    }
+
+    if(counter_100ms > 10)
+    {
+        RunTaskScheduler1s();
+        counter_100ms = 0;
+    }
 }
 
 void setup()
@@ -213,30 +298,12 @@ void setup()
 
     // Serial Start
     Serial.begin(9600); // Start serial communication at 9600 baud
+
+    // Timer
+    lastTimeRead = millis();
 }
 
 void loop()
 {
-    // Get Temperature
-    float temperature;
-    boolean alertPinState, alertRegisterState;
-    GetTemperature(temperature, alertPinState, alertRegisterState);
-
-    // Get Output Controller
-    float output = ControllerSelected(CONTROLLER_ID, temperature);
-
-    // Send Peltier Action
-    UpdatePeltierAction(output);
-
-    // Print serial
-    Serial.print(millis());
-    Serial.print(";");
-    Serial.print(temperature);
-    Serial.print(";");
-    Serial.println(output);
-
-    // Print Display
-    PrintMessageDisplay("Control: " + String(CONTROLLER_ID), 0);
-    PrintMessageDisplay("Temp: " + String(temperature) + "ºC", 1);
-
+    RunTaskScheduler();
 }
